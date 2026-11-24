@@ -294,6 +294,14 @@ async def async_setup_entry(
                 )
                 for description in COORDINATOR_HEALTH_SENSOR_DESCRIPTIONS
             )
+            # LOCAL PATCH: DHCP address reservation table on the master Deco.
+            async_add_entities(
+                [
+                    TplinkAddressReservationsSensor(
+                        coordinator_decos, coordinator_clients, master_deco.mac
+                    )
+                ]
+            )
             total_added = True
 
         for mac, deco in coordinator_decos.data.decos.items():
@@ -423,6 +431,61 @@ class TplinkTotalClientDataRateSensor(CoordinatorEntity, SensorEntity):
             ):
                 state += getattr(client, self._client_attribute)
         self._attr_native_value = state
+
+
+class TplinkAddressReservationsSensor(CoordinatorEntity, SensorEntity):
+    """LOCAL PATCH: DHCP address reservations (count + table as attributes)."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Address reservations"
+    _attr_icon = "mdi:ip-network"
+    _attr_state_class = SensorStateClass.MEASUREMENT
+
+    def __init__(
+        self,
+        coordinator_decos: TplinkDecoUpdateCoordinator,
+        coordinator_clients: TplinkDecoClientUpdateCoordinator,
+        master_deco_mac: str,
+    ) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator_decos)
+        self._coordinator_clients = coordinator_clients
+        self._master_deco_mac = master_deco_mac
+        self._attr_unique_id = f"{master_deco_mac}_address_reservations"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Attach the sensor to the master Deco."""
+        master_deco = self.coordinator.data.decos[self._master_deco_mac]
+        return create_device_info(master_deco, master_deco, self.coordinator)
+
+    @property
+    def available(self) -> bool:
+        """Unavailable until the table was fetched once."""
+        return super().available and self.coordinator.reservations is not None
+
+    @property
+    def native_value(self) -> int | None:
+        """Number of reservations."""
+        if self.coordinator.reservations is None:
+            return None
+        return len(self.coordinator.reservations)
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Reservation table with client names where the Deco knows them."""
+        clients = self._coordinator_clients.data or {}
+        names = {
+            str(mac).upper().replace(":", "-"): getattr(client, "name", None)
+            for mac, client in clients.items()
+        }
+        return {
+            "max_count": self.coordinator.reservations_max,
+            "reservations": [
+                {**entry, "name": names.get(entry["mac"])}
+                for entry in (self.coordinator.reservations or [])
+            ],
+        }
 
 
 class TplinkMobileDataUsageSensor(CoordinatorEntity, SensorEntity):

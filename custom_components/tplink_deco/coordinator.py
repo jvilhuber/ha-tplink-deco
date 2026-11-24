@@ -245,6 +245,33 @@ class TplinkDecoUpdateCoordinator(DataUpdateCoordinator):
 
         self.paused = False
         self.health = CoordinatorHealth()
+        # LOCAL PATCH: DHCP address reservations, refreshed with the device list.
+        # None = never fetched successfully; list of {"mac": "AA-BB-..", "ip": ..}
+        self.reservations: list[dict] | None = None
+        self.reservations_max: int | None = None
+
+    def reserved_ip_for(self, mac: str | None) -> str | None:
+        """LOCAL PATCH: reserved IP for a client MAC (any separator/case)."""
+        if not mac or not self.reservations:
+            return None
+        key = str(mac).upper().replace(":", "-")
+        for entry in self.reservations:
+            if entry["mac"] == key:
+                return entry["ip"]
+        return None
+
+    async def _async_refresh_reservations(self) -> None:
+        """LOCAL PATCH: fetch reservations; keep the previous list on failure."""
+        try:
+            result = await self.api.async_list_address_reservations()
+        except Exception as err:  # noqa: BLE001 - optional feature, never fail the update
+            _LOGGER.debug("address reservation request failed: %s", err)
+            return
+        self.reservations = sorted(
+            result.get("reservations") or [],
+            key=lambda r: tuple(int(p) if p.isdigit() else 0 for p in str(r["ip"]).split(".")),
+        )
+        self.reservations_max = result.get("max_count")
 
     async def _async_update_data(self):
         """Update data via api."""
@@ -281,6 +308,8 @@ class TplinkDecoUpdateCoordinator(DataUpdateCoordinator):
             self._process_device_list(new_decos)
             self._last_device_list_update = monotonic()
             self._force_device_list_refresh = False
+            # LOCAL PATCH: reservations change rarely; same cadence as device list.
+            await self._async_refresh_reservations()
             _LOGGER.debug(
                 "device_list request completed duration_seconds=%.3f",
                 monotonic() - device_list_started,

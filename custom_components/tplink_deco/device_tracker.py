@@ -345,6 +345,16 @@ class TplinkDecoDeviceTracker(CoordinatorEntity, RestoreEntity, ScannerEntity):
 class TplinkDecoClientDeviceTracker(CoordinatorEntity, RestoreEntity, ScannerEntity):
     """TP Link Deco Entity."""
 
+    @property
+    def entity_registry_enabled_default(self) -> bool:
+        """LOCAL PATCH: create new client trackers enabled.
+
+        HA's ScannerEntity default disables trackers whose MAC has no device
+        from another integration, so new clients (Gardena, TV, C210...) were
+        invisible to the Deco dashboard table and the AdGuard client sync.
+        """
+        return True
+
     def __init__(
         self,
         coordinator_decos: TplinkDecoUpdateCoordinator,
@@ -440,6 +450,8 @@ class TplinkDecoClientDeviceTracker(CoordinatorEntity, RestoreEntity, ScannerEnt
             ATTR_DECO_DEVICE: None if deco is None else deco.name,
             ATTR_DECO_MAC: self._attr_deco_mac,
             ATTR_UI_DEVICE_NAME: self._attr_name,
+            # LOCAL PATCH: DHCP address reservation for this client (None = none)
+            "reserved_ip": self._coordinator_decos.reserved_ip_for(self._mac_address),
         }
         if not self._link_client_devices:
             attributes[ATTR_MAC] = self._mac_address

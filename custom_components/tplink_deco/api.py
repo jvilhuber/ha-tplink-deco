@@ -495,6 +495,50 @@ class TplinkDecoApi:
             _LOGGER.error("%s parse response error=%s", context, err)
             raise err
 
+    # LOCAL PATCH (2026-11-24): DHCP address reservations (read-only).
+    # Endpoint per roquerodrigo/tplink-deco-api docs: admin/client,
+    # form=addr_reservation, operation=getlist ->
+    # {"reservation_list": [{"mac", "ip"}], "reservation_list_max_count": N}
+    async def async_list_address_reservations(
+        self, timeout_error_retries: int | None = None
+    ) -> dict:
+        async with self._operation_lock:
+            return await self._async_call_with_retry(
+                self._async_list_address_reservations,
+                timeout_error_retries=timeout_error_retries,
+            )
+
+    async def _async_list_address_reservations(self) -> dict:
+        await self.async_login_if_needed()
+
+        context = "List address reservations"
+        response_json = await self._async_post(
+            context,
+            f"{self._host}/cgi-bin/luci/;stok={self._stok}/admin/client",
+            params={"form": "addr_reservation"},
+            data=self._encode_payload({"operation": "getlist"}),
+        )
+
+        data = self._decrypt_data(context, response_json.get("data", response_json))
+        self._check_authenticated_data_error_code(context, data)
+
+        try:
+            result = data.get("result") or {}
+            reservations = []
+            for entry in result.get("reservation_list") or []:
+                mac = str(entry.get("mac") or "").upper().replace(":", "-")
+                ip = entry.get("ip")
+                if mac and ip:
+                    reservations.append({"mac": mac, "ip": ip})
+            _LOGGER.debug("%s count=%d", context, len(reservations))
+            return {
+                "reservations": reservations,
+                "max_count": result.get("reservation_list_max_count"),
+            }
+        except Exception as err:
+            _LOGGER.error("%s parse response error=%s", context, err)
+            raise err
+
     def _generate_aes_key_and_iv(self):
         # TPLink requires key and IV to be a 16 digit number (no leading 0s)
         self._aes_key = secrets.randbelow(MAX_AES_KEY - MIN_AES_KEY) + MIN_AES_KEY
